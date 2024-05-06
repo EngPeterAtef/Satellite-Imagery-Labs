@@ -227,17 +227,18 @@ def get_data_loaders():
     ])
 
     train_set = SimDataset(100, transform = trans)
-    val_set = SimDataset(20, transform = trans)
-
+    val_set = SimDataset(25, transform = trans)
+    test_set = SimDataset(25, transform = trans)
     image_datasets = {
-        'train': train_set, 'val': val_set
+        'train': train_set, 'val': val_set, 'test': test_set
     }
 
     batch_size = 25
 
     dataloaders = {
         'train': DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=0),
-        'val': DataLoader(val_set, batch_size=batch_size, shuffle=True, num_workers=0)
+        'val': DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=0),
+        'test': DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=0)
     }
 
     return dataloaders
@@ -345,6 +346,7 @@ def train_model(model, optimizer, scheduler, num_epochs=25):
 
 def run(UNet):
     num_class = 6
+
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     model = UNet(num_class).to(device)
