@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torch
 import torch.optim as optim
 from torch.optim import lr_scheduler
+from tqdm import tqdm
 import time
 import copy
 
@@ -26,7 +27,6 @@ def generate_random_data(height, width, count):
 
 def generate_img_and_mask(height, width):
     shape = (height, width)
-
     triangle_location = get_random_location(*shape)
     circle_location1 = get_random_location(*shape, zoom=0.7)
     circle_location2 = get_random_location(*shape, zoom=0.5)
@@ -119,6 +119,8 @@ def add_plus(arr, x, y, size):
 
 
 def get_random_location(width, height, zoom=1.0):
+    # set the seed to 27 so that we can have a reproducible example
+    random.seed(27)
     x = int(width * random.uniform(0.1, 0.9))
     y = int(height * random.uniform(0.1, 0.9))
 
@@ -269,6 +271,11 @@ def calc_loss(pred, target, metrics, bce_weight=0.5):
 
     return loss
 
+def jaccard_index(outputs, labels):
+    intersection = torch.logical_and(outputs, labels).sum().item()
+    union = torch.logical_or(outputs, labels).sum().item()
+    iou = intersection / union if union > 0 else 0
+    return iou
 
 def print_metrics(metrics, epoch_samples, phase):
     outputs = []
@@ -304,7 +311,7 @@ def train_model(model, optimizer, scheduler, num_epochs=25):
             metrics = defaultdict(float)
             epoch_samples = 0
 
-            for inputs, labels in dataloaders[phase]:
+            for inputs, labels in tqdm(dataloaders[phase]):
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
@@ -328,6 +335,8 @@ def train_model(model, optimizer, scheduler, num_epochs=25):
             print_metrics(metrics, epoch_samples, phase)
             epoch_loss = metrics['loss'] / epoch_samples
 
+            # jaccard index
+            print("jaccard_index",jaccard_index(outputs, labels))
             # deep copy the model
             if phase == 'val' and epoch_loss < best_loss:
                 print("saving best model")
@@ -343,6 +352,33 @@ def train_model(model, optimizer, scheduler, num_epochs=25):
     model.load_state_dict(best_model_wts)
     return model
 
+def test(model,num_class=6):
+    dataloaders = get_data_loaders()
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    jaccard_indexs = []
+    dice = []
+    model.eval()  # Set model to the evaluation
+    with torch.no_grad():
+        for inputs, labels in tqdm(dataloaders['test']):
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+
+            outputs = model(inputs)
+            outputs = F.sigmoid(outputs)
+            outputs = outputs.data.cpu().numpy()
+            jaccard_indexs.append(jaccard_index(outputs, labels))
+            dice.append(dice_loss(outputs, labels))
+        print('jaccard_index: {}'.format(np.mean(jaccard_indexs)))
+        # dice loss
+        print('dice loss: {}'.format(np.mean(dice)))
+        # Change channel-order and make 3 channels for matplot
+        # input_images_rgb = [reverse_transform(x) for x in inputs.cpu()]
+
+        # # Map each channel (i.e. class) to each color
+        # target_masks_rgb = [masks_to_colorimg(x) for x in labels.cpu().numpy()]
+        # pred_rgb = [masks_to_colorimg(x) for x in outputs]
+
+        # plot_side_by_side([input_images_rgb, target_masks_rgb, pred_rgb])
 
 def run(UNet):
     num_class = 6
@@ -355,35 +391,36 @@ def run(UNet):
 
     exp_lr_scheduler = lr_scheduler.StepLR(optimizer_ft, step_size=30, gamma=0.1)
 
-    model = train_model(model, optimizer_ft, exp_lr_scheduler, num_epochs=60)
+    model = train_model(model, optimizer_ft, exp_lr_scheduler, num_epochs=1)
 
     model.eval()  # Set model to the evaluation mode
 
-    trans = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # imagenet
-    ])
-    # # Create another simulation dataset for test
-    test_dataset = SimDataset(3, transform = trans)
-    test_loader = DataLoader(test_dataset, batch_size=3, shuffle=False, num_workers=0)
+    test(model,num_class)
+    # trans = transforms.Compose([
+    #     transforms.ToTensor(),
+    #     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # imagenet
+    # ])
+    # # # Create another simulation dataset for test
+    # test_dataset = SimDataset(3, transform = trans)
+    # test_loader = DataLoader(test_dataset, batch_size=3, shuffle=False, num_workers=0)
 
-    # Get the first batch
-    inputs, labels = next(iter(test_loader))
-    inputs = inputs.to(device)
-    labels = labels.to(device)
+    # # Get the first batch
+    # inputs, labels = next(iter(test_loader))
+    # inputs = inputs.to(device)
+    # labels = labels.to(device)
 
-    # Predict
-    pred = model(inputs)
-    # The loss functions include the sigmoid function.
-    pred = F.sigmoid(pred)
-    pred = pred.data.cpu().numpy()
-    print(pred.shape)
+    # # Predict
+    # pred = model(inputs)
+    # # The loss functions include the sigmoid function.
+    # pred = F.sigmoid(pred)
+    # pred = pred.data.cpu().numpy()
+    # print(pred.shape)
 
-    # Change channel-order and make 3 channels for matplot
-    input_images_rgb = [reverse_transform(x) for x in inputs.cpu()]
+    # # Change channel-order and make 3 channels for matplot
+    # input_images_rgb = [reverse_transform(x) for x in inputs.cpu()]
 
-    # Map each channel (i.e. class) to each color
-    target_masks_rgb = [masks_to_colorimg(x) for x in labels.cpu().numpy()]
-    pred_rgb = [masks_to_colorimg(x) for x in pred]
+    # # Map each channel (i.e. class) to each color
+    # target_masks_rgb = [masks_to_colorimg(x) for x in labels.cpu().numpy()]
+    # pred_rgb = [masks_to_colorimg(x) for x in pred]
 
-    plot_side_by_side([input_images_rgb, target_masks_rgb, pred_rgb])
+    # plot_side_by_side([input_images_rgb, target_masks_rgb, pred_rgb])
