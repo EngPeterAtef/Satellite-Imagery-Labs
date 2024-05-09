@@ -14,7 +14,15 @@ from tqdm import tqdm
 import time
 import copy
 import gc
+from sklearn.metrics import f1_score, jaccard_score
 
+random.seed(27)
+np.random.seed(27)
+torch.manual_seed(27)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(27)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def generate_random_data(height, width, count):
     x, y = zip(*[generate_img_and_mask(height, width) for i in range(0, count)])
@@ -29,7 +37,6 @@ def generate_random_data(height, width, count):
 def generate_img_and_mask(height, width):
     shape = (height, width)
     # set the seed to 27 so that we can have a reproducible example
-    random.seed(27)
     triangle_location = get_random_location(*shape)
     circle_location1 = get_random_location(*shape, zoom=0.7)
     circle_location2 = get_random_location(*shape, zoom=0.5)
@@ -296,36 +303,12 @@ def dice_loss(pred, target, smooth=1.0):
     return loss.mean()
 
 
-def calculate_dice_coefficient_train(y_pred, y_true):
-    eps = 1e-10  # epsilon to avoid division by zero
-    intersection = torch.sum(y_true * y_pred)
-    # dice_coeff = (2.0 * intersection) / (np.sum(y_true) + np.sum(y_pred))
-    dice_coeff = (2.0 * intersection + eps) / (
-        torch.sum(y_true) + torch.sum(y_pred) + eps
-    )
-    return dice_coeff
-
-
-def calculate_dice_coefficient_test(y_pred, y_true):
-    eps = 1e-10  # epsilon to avoid division by zero
-    intersection = np.sum(y_true * y_pred)
-    dice_coeff = (2.0 * intersection + eps) / (np.sum(y_true) + np.sum(y_pred) + eps)
-    return dice_coeff
 
 
 def calc_loss(pred, target, metrics, bce_weight=0.5):
     bce = F.binary_cross_entropy_with_logits(pred, target)
-    # print("BCE loss:", bce)
-    # pred = F.sigmoid(pred)
-    # print("prediction before softmax:", pred[0][0], pred.shape)
     pred = F.softmax(pred, dim=1)
-    # print("prediction after softmax:", pred[0][0], pred.shape)
-    # get the class with the largest probability for each pixel
-    # pred = pred.argmax(dim=1)
-    # print("prediction after argmax:", pred[0], pred.shape)
-    # print("Target:", target[0], target.shape)
     dice = dice_loss(pred, target)
-    # print("Dice loss:", dice)
     loss = bce * bce_weight + dice * (1 - bce_weight)
 
     metrics["bce"] += bce.data.cpu().numpy() * target.size(0)
@@ -335,30 +318,24 @@ def calc_loss(pred, target, metrics, bce_weight=0.5):
     return loss
 
 
-def calculate_jaccard_index_train(y_pred, y_true):
-    # eps = 1e-10  # epsilon to avoid division by zero
-    # intersection = torch.sum(y_true * y_pred)
-    # union = torch.sum(torch.maximum(y_true, y_pred))
-    # jaccard_index = (intersection + eps) / (union + eps)
-    # return jaccard_index
-    eps = 1e-10  # epsilon to avoid division by zero
-    intersection = torch.sum(y_pred * y_true)
-    union = torch.sum(y_pred) + torch.sum(y_true) - intersection
-    jaccard = (intersection + eps) / (union + eps)
-    return jaccard
+def calculate_dice_coefficient(y_pred, y_true):
+    if isinstance(y_pred, torch.Tensor):
+        y_pred = y_pred.cpu().numpy().flatten()
+        y_true = y_true.cpu().numpy().flatten()
+    else:
+        y_pred = y_pred.flatten()
+        y_true = y_true.flatten()
+    return f1_score(y_true, y_pred, average="macro")
 
+def calculate_jaccard_index(y_pred, y_true):
+    if isinstance(y_pred, torch.Tensor):
+        y_pred = y_pred.cpu().numpy().flatten()
+        y_true = y_true.cpu().numpy().flatten()
+    else:
+        y_pred = y_pred.flatten()
+        y_true = y_true.flatten()
+    return jaccard_score(y_true, y_pred, average="macro")
 
-def calculate_jaccard_index_test(y_pred, y_true):
-    # eps = 1e-10  # epsilon to avoid division by zero
-    # intersection = np.sum(y_true * y_pred)
-    # union = np.sum(np.maximum(y_true, y_pred))
-    # jaccard_index = (intersection + eps) / (union + eps)
-    # return jaccard_index
-    eps = 1e-10  # epsilon to avoid division by zero
-    intersection = np.sum(y_pred * y_true)
-    union = np.sum(y_pred) + np.sum(y_true) - intersection
-    jaccard = (intersection + eps) / (union + eps)
-    return jaccard
 
 
 def print_metrics(metrics, epoch_samples, phase):
@@ -377,18 +354,12 @@ def evaluate_predictions_train(predictions, true_labels):
     for i in range(len(predictions)):
         pred = predictions[i]
         true_label = true_labels[i]
-        # print("Prediction shape:", pred.shape)
-        # print("True label shape:", true_label.shape)
         pred_class = pred.argmax(dim=0)
         true_label_class = true_label.argmax(dim=0)
-        # print("Processing image", i + 1)
-        # print("Prediction class shape:", pred_class.shape)
-        # print("True label class shape:", true_label_class.shape)
-        dice_score = calculate_dice_coefficient_train(pred_class, true_label_class)
-        # print("Dice Score:", dice_score)
-        jaccard_index = calculate_jaccard_index_train(pred_class, true_label_class)
-        dice_scores.append(dice_score.cpu().numpy())
-        jaccard_indices.append(jaccard_index.cpu().numpy())
+        dice_score = calculate_dice_coefficient(pred_class, true_label_class)
+        jaccard_index = calculate_jaccard_index(pred_class, true_label_class)
+        dice_scores.append(dice_score)
+        jaccard_indices.append(jaccard_index)
 
     return dice_scores, jaccard_indices
 
@@ -399,16 +370,10 @@ def evaluate_predictions_test(predictions, true_labels):
     for i in range(len(predictions)):
         pred = predictions[i]
         true_label = true_labels[i]
-        # print("Prediction shape:", pred.shape)
-        # print("True label shape:", true_label.shape)
         pred_class = np.argmax(pred, axis=0)
         true_label_class = np.argmax(true_label, axis=0)
-        # print("Processing image", i + 1)
-        # print("Prediction class shape:", pred_class.shape)
-        # print("True label class shape:", true_label_class.shape)
-        dice_score = calculate_dice_coefficient_test(pred_class, true_label_class)
-        # print("Dice Score:", dice_score)
-        jaccard_index = calculate_jaccard_index_test(pred_class, true_label_class)
+        dice_score = calculate_dice_coefficient(pred_class, true_label_class)
+        jaccard_index = calculate_jaccard_index(pred_class, true_label_class)
         dice_scores.append(dice_score)
         jaccard_indices.append(jaccard_index)
 
@@ -579,42 +544,9 @@ def run(UNet, num_epochs=60):
     print("Plotting side by side..")
     plot_side_by_side([input_images_rgb, target_masks_rgb, pred_rgb])
 
-    # trans = transforms.Compose(
-    #     [
-    #         transforms.ToTensor(),
-    #         transforms.Normalize(
-    #             [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-    #         ),  # imagenet
-    #     ]
-    # )
-    # # # Create another simulation dataset for test
-    # test_dataset = SimDataset(3, transform=trans)
-    # test_loader = DataLoader(test_dataset, batch_size=3, shuffle=False, num_workers=0)
-
-    # # Get the first batch
-    # inputs, labels = next(iter(test_loader))
-    # inputs = inputs.to(device)
-    # labels = labels.to(device)
-
-    # # Predict
-    # pred = model(inputs)
-    # # The loss functions include the sigmoid function.
-    # pred = F.sigmoid(pred)
-    # pred = pred.data.cpu().numpy()
-    # print(pred.shape)
-
-    # # Change channel-order and make 3 channels for matplot
-    # input_images_rgb = [reverse_transform(x) for x in inputs.cpu()]
-
-    # # Map each channel (i.e. class) to each color
-    # target_masks_rgb = [masks_to_colorimg(x) for x in labels.cpu().numpy()]
-    # pred_rgb = [masks_to_colorimg(x) for x in pred]
-
-    # plot_side_by_side([input_images_rgb, target_masks_rgb, pred_rgb])
-
-    # empties the cache
+    # clear the cache
     torch.cuda.empty_cache()
-    # empty the gpu memory
+    # clear gpu memory
     del model
     del optimizer_ft
     del exp_lr_scheduler
